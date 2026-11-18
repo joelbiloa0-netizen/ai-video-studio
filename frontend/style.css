@@ -256,6 +256,42 @@ input[type="file"]::file-selector-button {
   font-size: 0.75rem;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 4px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(36, 211, 165, 0.06);
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--accent-2);
+  cursor: pointer;
+}
+
+.checkbox-row strong,
+.checkbox-row small {
+  display: block;
+}
+
+.checkbox-row strong {
+  font-size: 0.85rem;
+}
+
+.checkbox-row small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 400;
+}
+
 .field-error {
   margin-top: 6px;
   color: var(--danger);

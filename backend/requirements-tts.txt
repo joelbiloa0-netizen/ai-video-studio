@@ -1,0 +1,10 @@
+# Moteur vocal LOCAL de secours (100 % CPU / hors-ligne).
+#
+# edge-tts reste le moteur prioritaire. Lorsqu'il est bloqué (403, timeout,
+# coupure réseau), l'agent Ingénieur Son bascule automatiquement sur Piper.
+# Ce paquet est optionnel mais recommandé pour un fonctionnement autonome.
+#
+# Installation (aucun sudo requis) :
+#   pip install -r backend/requirements-tts.txt
+#   python backend/telecharger_voix_piper.py
+piper-tts==1.8.0

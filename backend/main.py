@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .agent_sound import VoiceOverError, generate_voiceover_and_subs
+from .agent_transcriber import TranscriptionError, transcribe_audio_or_video
 from .agent_video import VideoAssemblyError, assemble_video
 from .agent_writer import FormatVideo, Scenario, generate_script
 
@@ -69,7 +70,8 @@ def read_status() -> dict[str, Any]:
             "formats 9:16, 16:9 et 1:1",
             "génération de scénario structuré (agent IA)",
             "sous-titres synchronisés",
-            "voix off edge-tts",
+            "voix off edge-tts avec secours local",
+            "transcription de rush via Whisper CPU int8",
             "montage FFmpeg / MoviePy",
         ],
     }
@@ -220,6 +222,10 @@ class VideoRequest(BaseModel):
         default=FormatVideo.VERTICAL,
         description="Format de rendu : 9:16, 16:9 ou 1:1.",
     )
+    mode_leger: bool = Field(
+        default=True,
+        description="Rendu 720p/20 fps (défaut) au lieu du 1080p/24 fps.",
+    )
 
 
 class VideoResponse(BaseModel):
@@ -229,6 +235,7 @@ class VideoResponse(BaseModel):
     duree_secondes: float
     sous_titres_integres: bool
     sous_titres_path: str | None = None
+    mode_leger: bool = True
 
 
 @app.post(
@@ -267,6 +274,7 @@ async def create_video(requete: VideoRequest) -> VideoResponse:
             str(sous_titres) if sous_titres else "",
             str(sortie),
             requete.format_video.value,
+            requete.mode_leger,
         )
     except VideoAssemblyError as exc:
         raise HTTPException(
@@ -278,6 +286,7 @@ async def create_video(requete: VideoRequest) -> VideoResponse:
         video_path=resultat.chemin_video.relative_to(PROJECT_ROOT).as_posix(),
         duree_secondes=round(resultat.duree_secondes, 3),
         sous_titres_integres=resultat.sous_titres_integres,
+        mode_leger=requete.mode_leger,
         sous_titres_path=(
             resultat.chemin_sous_titres.relative_to(PROJECT_ROOT).as_posix()
             if resultat.chemin_sous_titres
@@ -318,6 +327,98 @@ async def upload_images(
             await fichier.close()
         chemins.append(chemin.relative_to(PROJECT_ROOT).as_posix())
     return {"image_paths": chemins}
+
+
+EXTENSIONS_MEDIA = {
+    ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".oga", ".flac", ".opus", ".wma",
+    ".aiff", ".mp4", ".mov", ".mkv", ".avi", ".webm", ".mpeg", ".mpg", ".3gp",
+}
+TAILLE_MAX_MEDIA = 200 * 1024 * 1024
+"""Limite de 200 Mo : évite de saturer le disque et la RAM avec un gros rush."""
+
+
+class TranscriptionResponse(BaseModel):
+    """SRT généré, texte intégral et métadonnées de la transcription."""
+
+    sous_titres_path: str
+    texte: str
+    langue: str | None = None
+    duree_secondes: float
+    modele: str
+    media_path: str
+
+
+@app.post(
+    "/api/transcribe",
+    response_model=TranscriptionResponse,
+    tags=["Transcription"],
+    summary="Transcrit un rush audio/vidéo en sous-titres SRT (Whisper CPU)",
+)
+async def transcribe_media(
+    media: UploadFile = File(..., description="Fichier audio ou vidéo à transcrire."),
+    model_size: Literal["tiny", "base"] = Form(
+        "tiny",
+        description="Modèle Whisper : tiny (~75 Mo, défaut) ou base (~145 Mo).",
+    ),
+) -> TranscriptionResponse:
+    """Dépose un rush dans `temp/`, le transcrit et renvoie le SRT + le texte.
+
+    L'extraction audio et l'inférence tournent sur CPU en int8, dans un thread
+    dédié. Le rush est conservé dans `temp/` pour alimenter le montage.
+    """
+    type_media = (media.content_type or "").lower()
+    suffixe = Path(media.filename or "").suffix.lower()
+    if suffixe not in EXTENSIONS_MEDIA and not type_media.startswith(
+        ("audio/", "video/")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Format de média non reconnu (audio ou vidéo attendu).",
+        )
+    if suffixe not in EXTENSIONS_MEDIA:
+        suffixe = ".mp4" if type_media.startswith("video/") else ".mp3"
+
+    identifiant = uuid4().hex[:12]
+    chemin_media = TEMP_DIR / f"rush-{identifiant}{suffixe}"
+    chemin_srt = TEMP_DIR / f"transcription-{identifiant}.srt"
+    reussi = False
+
+    try:
+        taille = 0
+        with chemin_media.open("wb") as fichier:
+            while morceau := await media.read(1024 * 1024):
+                taille += len(morceau)
+                if taille > TAILLE_MAX_MEDIA:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Fichier trop volumineux (limite : 200 Mo).",
+                    )
+                fichier.write(morceau)
+        if taille == 0:
+            raise HTTPException(status_code=400, detail="Le fichier envoyé est vide.")
+
+        resultat = await transcribe_audio_or_video(
+            str(chemin_media), str(chemin_srt), model_size
+        )
+        reussi = True
+    except TranscriptionError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Transcription impossible : {exc}"
+        ) from exc
+    finally:
+        await media.close()
+        if not reussi:
+            chemin_media.unlink(missing_ok=True)
+            chemin_srt.unlink(missing_ok=True)
+
+    return TranscriptionResponse(
+        sous_titres_path=resultat.chemin_srt.relative_to(PROJECT_ROOT).as_posix(),
+        texte=resultat.texte,
+        langue=resultat.langue,
+        duree_secondes=round(resultat.duree_secondes, 3),
+        modele=model_size,
+        media_path=chemin_media.relative_to(PROJECT_ROOT).as_posix(),
+    )
 
 
 # Les montages statiques sont déclarés en dernier : les routes API restent prioritaires.

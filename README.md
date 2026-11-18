@@ -53,22 +53,23 @@ Texte  →  Script / découpage  →  Voix off (edge-tts)
 | --- | --- | --- |
 | API | **FastAPI** + Uvicorn | Endpoints REST et orchestration des rendus |
 | Frontend | **HTML5 / CSS3 / JavaScript natif** | Interface web sans framework |
-| Voix off | **edge-tts** | Synthèse vocale gratuite et multilingue |
+| Voix off | **edge-tts** + **Piper** (secours local) | Synthèse gratuite, avec bascule automatique hors-ligne |
+| Transcription | **faster-whisper** (tiny/base, CPU int8) | Sous-titres SRT d'un rush audio ou vidéo |
 | Montage | **FFmpeg** + **MoviePy** | Encodage, découpe, transitions et incrustation |
 | Langage | **Python 3** | Logique métier, agents et scripts multimédia |
 | Tests | **unittest / pytest** | Tests unitaires des fonctions critiques |
 | Scénario | **Google Gemini** (`google-generativeai`, optionnel) | Génération du scénario JSON structuré |
 | Coût | **100 % gratuit** | Aucun service payant ni abonnement requis |
 
-> ℹ️ `edge-tts` utilise le service vocal en ligne de Microsoft Edge : une connexion Internet est nécessaire pour la génération de la voix off. Tout le reste fonctionne localement.
+> ℹ️ `edge-tts` utilise le service vocal en ligne de Microsoft Edge. S'il est bloqué (HTTP 403, timeout, coupure réseau), l'agent bascule **automatiquement et sans erreur** sur **Piper**, un moteur vocal local CPU qui fonctionne hors-ligne. Les sous-titres sont alors recalculés à partir de la durée réelle de l'audio et du découpage du texte en phrases. Le pipeline audio réussit donc dans tous les cas.
 
 ---
 
 ## ⚙️ Prérequis
 
 - **Python 3.10+**
-- **FFmpeg** installé et accessible dans le `PATH`
-- Connexion Internet pour la synthèse vocale `edge-tts`
+- **FFmpeg** : le binaire embarqué fourni par `imageio-ffmpeg` suffit (aucune installation système requise)
+- Connexion Internet **facultative** : edge-tts en tire parti, sinon le moteur local Piper prend le relais
 
 Vérification rapide de FFmpeg :
 
@@ -95,6 +96,17 @@ pip install -r backend/requirements.txt
 ```
 
 Les dossiers `outputs/` et `temp/` sont ignorés par Git : ils sont créés localement **et recréés automatiquement au démarrage de l'API** (voir `backend/main.py`).
+
+### Voix locale hors-ligne (recommandé)
+
+Pour garantir un fonctionnement 100 % autonome même si Microsoft bloque edge-tts :
+
+```bash
+pip install -r backend/requirements-tts.txt   # piper-tts, aucun sudo requis
+python backend/telecharger_voix_piper.py      # voix française, ~61 Mo, une seule fois
+```
+
+Le modèle est stocké dans `media_cache/piper/` (ignoré par Git). Sans ce paquet, le pipeline renvoie une erreur 503 explicite si edge-tts est injoignable ; avec lui, l'audio est **toujours** généré.
 
 ### Mode scénariste IA (optionnel)
 
@@ -137,19 +149,29 @@ curl -X POST http://localhost:8000/api/generate-audio \
   -d '{"text": "Bonjour et bienvenue au studio.", "voice": "fr-FR-DeniseNeural", "format_sous_titres": "srt", "dossier": "temp"}'
 ```
 
-Le format des sous-titres est déduit de l'extension (`.srt` ou `.vtt`). Les fichiers partiels sont supprimés automatiquement en cas d'échec réseau, et l'API renvoie alors une erreur HTTP 503 explicite.
+Le format des sous-titres est déduit de l'extension (`.srt` ou `.vtt`). Si edge-tts échoue, le moteur local Piper prend automatiquement le relais et les sous-titres sont reconstruits sur la durée réelle de l'audio — l'appel renvoie donc bien HTTP 200. Les fichiers partiels ne sont supprimés que si **les deux** moteurs échouent (HTTP 503 explicite).
 
 Assembler la vidéo finale (les chemins sont relatifs à la racine du projet) :
 
 ```bash
 curl -X POST http://localhost:8000/api/assemble-video \
   -H "Content-Type: application/json" \
-  -d '{"image_paths": ["temp/img1.png", "temp/img2.png"], "audio_path": "temp/vo.mp3", "subtitle_path": "temp/vo.srt", "format_video": "9:16"}'
+  -d '{"image_paths": ["temp/img1.png", "temp/img2.png"], "audio_path": "temp/vo.mp3", "subtitle_path": "temp/vo.srt", "format_video": "9:16", "mode_leger": true}'
 ```
 
-La vidéo est écrite dans `outputs/`, calée sur la durée de la voix off. Les images sont redimensionnées sans déformation puis centrées. Si FFmpeg ne dispose pas du filtre `subtitles`, les sous-titres sont livrés en fichier `.srt` séparé à côté de la vidéo.
+La vidéo est écrite dans `outputs/`, calée sur la durée de la voix off. `mode_leger` (actif par défaut) rend en **720p / 20 fps** — 720×1280 en 9:16, 1280×720 en 16:9, 720×720 en 1:1 — contre 1080p / 24 fps quand il est à `false`. Les images sont redimensionnées sans déformation puis centrées. Si FFmpeg ne dispose pas du filtre `subtitles`, les sous-titres sont livrés en fichier `.srt` séparé à côté de la vidéo.
 
 Les images destinées au montage peuvent être déposées dans `temp/` via `POST /api/upload-images` (multipart/form-data, champ `files`) ; le service renvoie les chemins relatifs à utiliser dans `/api/assemble-video`.
+
+Transcrire un rush (audio ou vidéo) en sous-titres :
+
+```bash
+curl -X POST http://localhost:8000/api/transcribe \
+  -F "media=@mon-rush.mp4;type=video/mp4" \
+  -F "model_size=tiny"
+```
+
+Le média est enregistré dans `temp/`, converti en WAV 16 kHz mono par FFmpeg puis transcrit par Whisper **uniquement sur CPU en int8**. La réponse contient `sous_titres_path`, `texte`, `langue`, `duree_secondes` et `media_path` (ce dernier peut servir à remonter la vidéo). Le champ `model_size` accepte `tiny` (défaut, ~75 Mo) ou `base` (~145 Mo) ; un seul modèle est chargé en mémoire et une seule transcription tourne à la fois pour préserver la RAM. Le premier appel télécharge le modèle depuis Hugging Face (une seule fois).
 
 ---
 
@@ -165,6 +187,9 @@ pytest tests/
 
 ## 🧠 Optimisations faible RAM (CPU)
 
+- **Mode léger 720p / 20 fps activé par défaut** dans l'interface et dans l'API, pour rester sous 1 Go de RAM pendant l'encodage.
+- Moteur vocal local Piper en int8/ONNX CPU (~61 Mo de modèle), chargé une seule fois puis réutilisé.
+- Transcription Whisper en `tiny` int8 : **aucun GPU**, modèle chargé une seule fois, verrou sérialisant les requêtes, WAV temporaire supprimé après chaque appel.
 - Aucun modèle de deep learning local lourd : uniquement des outils légers et gratuits.
 - Traitement vidéo **image par image** et écriture en flux avec FFmpeg, sans charger la vidéo entière en mémoire.
 - Résolutions et durées réduites par défaut pour les rendus de test.
@@ -179,7 +204,9 @@ pytest tests/
 - [x] Endpoint de génération de script à partir d'un sujet
 - [x] Interface web responsive et sélection des formats 9:16 / 16:9 / 1:1
 - [x] Assemblage multi-formats (9:16, 16:9, 1:1) avec sous-titres incrustés
-- [x] Voix off edge-tts et sous-titres synchronisés SRT / VTT
+- [x] Voix off edge-tts avec fallback local Piper + sous-titres synchronisés SRT / VTT
+- [x] Mode léger 720p par défaut pour les machines à faible RAM
+- [x] Agent de transcription Whisper CPU int8 d'un rush avec route POST /api/transcribe
 - [ ] Style de sous-titres configurable
 - [x] Choix de la voix et de la langue (edge-tts)
 - [ ] File d'attente de rendus et suivi de progression

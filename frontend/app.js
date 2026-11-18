@@ -7,6 +7,7 @@ const ideaInput = document.getElementById("idea");
 const ideaError = document.getElementById("idea-error");
 const imageInput = document.getElementById("images");
 const voiceInput = document.getElementById("voice");
+const modeLegerInput = document.getElementById("mode-leger");
 const submitButton = document.getElementById("submit-btn");
 const submitLabel = document.getElementById("submit-label");
 const spinner = document.getElementById("spinner");
@@ -229,6 +230,7 @@ function renderVideo(video, note) {
     `<h3>Montage terminé</h3>
      ${note ? `<p class="muted">${escapeHtml(note)}</p>` : ""}
      <div class="info-row"><span>Vidéo</span><code>${escapeHtml(video.video_path)}</code></div>
+     <div class="info-row"><span>Qualité</span><span>${video.mode_leger === false ? "1080p · 24 fps" : "720p · 20 fps (léger)"}</span></div>
      <div class="info-row"><span>Durée</span><span>${video.duree_secondes} s</span></div>
      <div class="info-row">
        <span>Sous-titres incrustés</span>
@@ -324,6 +326,7 @@ form.addEventListener("submit", async (event) => {
         audio_path: audio.audio_path,
         subtitle_path: audio.sous_titres_path,
         format_video: format,
+        mode_leger: modeLegerInput.checked,
       }),
     });
     state.video = video;

@@ -1,18 +1,32 @@
 """Agent Ingénieur Son du Studio Vidéo IA.
 
-Génère une voix off MP3 avec ``edge-tts`` et construit des sous-titres
-synchronisés (SRT ou WebVTT) à partir des événements ``WordBoundary`` du
-service. Le format des sous-titres est déduit de l'extension du chemin fourni.
+Génère une voix off MP3 et des sous-titres synchronisés (SRT ou WebVTT).
+
+Deux moteurs sont enchaînés automatiquement :
+
+1. ``edge-tts`` — voix naturelle, nécessite Internet ;
+2. ``piper-tts`` — moteur local CPU, 100 % hors-ligne, utilisé en secours dès
+   qu'edge-tts échoue (403, timeout, coupure réseau). Dans ce cas, les
+   sous-titres sont reconstruits à partir de la **durée réelle** du fichier
+   audio produit et du découpage du texte en phrases.
+
+Le format des sous-titres est déduit de l'extension du chemin fourni.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
+import re
+import shutil
+import subprocess
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
 import edge_tts
+import imageio_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +37,12 @@ LONGUEUR_MAX_SOUS_TITRE = 84
 MOTS_MAX_PAR_SOUS_TITRE = 14
 TIMEOUT_SYNTHESE = 90.0
 """Garde-fou : évite qu'une requête réseau bloquée immobilise l'API."""
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MODELE_PIPER = (
+    PROJECT_ROOT / "media_cache" / "piper" / "fr_FR-siwis-medium.onnx"
+)
+"""Voix française Piper (61 Mo) mise en cache, ignorée par Git."""
 
 
 class VoiceOverError(RuntimeError):
@@ -134,6 +154,138 @@ async def _stream_audio(
         raise VoiceOverError("Aucun flux audio n'a été reçu du service de synthèse.")
 
 
+# ---------------------------------------------------------------------------
+# Moteur local de secours (Piper, CPU, hors-ligne)
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=1)
+def _binaire_ffmpeg() -> str:
+    """Utilise FFmpeg système si présent, sinon le binaire embarqué imageio."""
+    return shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
+
+
+@functools.lru_cache(maxsize=1)
+def _voix_piper():
+    """Charge une seule fois le modèle Piper (assembly ONNX ~61 Mo)."""
+    from piper import PiperVoice
+
+    return PiperVoice.load(str(MODELE_PIPER))
+
+
+def _extraire_phrases(texte: str) -> list[str]:
+    """Découpe le texte en répliques courtes, ponctuation conservée."""
+    morceaux = re.split(r"(?<=[.!?…;:])\s+", texte.strip())
+    phrases: list[str] = []
+    for morceau in morceaux:
+        morceau = morceau.strip()
+        if not morceau:
+            continue
+        # Une phrase trop longue est redecoupée au dernier comma disponible.
+        while len(morceau) > LONGUEUR_MAX_SOUS_TITRE and "," in morceau:
+            gauche, droite = morceau.rsplit(",", 1)
+            if not gauche.strip() or not droite.strip():
+                break
+            phrases.append(gauche.strip() + ",")
+            morceau = droite.strip()
+        phrases.append(morceau)
+    return phrases
+
+
+def _repliques_depuis_duree(texte: str, duree_secondes: float) -> list[_Replique]:
+    """Répartit la durée réelle de l'audio entre les phrases du texte.
+
+    Le poids de chaque phrase est son nombre de mots : une phrase longue
+    reçoit proportionnellement plus de temps qu'une courte. L'horodatage
+    final tombe exactement sur la fin du fichier audio.
+    """
+    phrases = _extraire_phrases(texte) or [texte.strip()]
+    poids = [max(1, len(phrase.split())) for phrase in phrases]
+    total = sum(poids)
+    ticks_total = max(1, round(duree_secondes * TICKS_PAR_SECONDE))
+
+    repliques: list[_Replique] = []
+    debut = 0
+    cumul = 0
+    for phrase, poids_phrase in zip(phrases, poids):
+        cumul += poids_phrase
+        fin = round(ticks_total * cumul / total)
+        fin = max(debut + 1, fin)
+        repliques.append(_Replique(debut=debut, fin=fin, texte=phrase))
+        debut = fin
+    return repliques
+
+
+def _piper_synthese_sync(texte: str, chemin_wav: Path) -> float:
+    """Synthétise le texte en WAV et renvoie sa durée réelle (en secondes)."""
+    voix = _voix_piper()
+    with wave.open(str(chemin_wav), "wb") as fichier:
+        voix.synthesize_wav(texte, fichier)
+    with wave.open(str(chemin_wav), "rb") as fichier:
+        return fichier.getnframes() / fichier.getframerate()
+
+
+def _wav_vers_mp3_sync(source: Path, cible: Path) -> None:
+    """Convertit le WAV Piper en MP3 avec l'encodeur lame de FFmpeg."""
+    commande = [
+        _binaire_ffmpeg(),
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source),
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+        str(cible),
+    ]
+    resultat = subprocess.run(
+        commande, capture_output=True, text=True, timeout=120, check=False
+    )
+    if resultat.returncode != 0:
+        raise RuntimeError(
+            f"Conversion WAV -> MP3 impossible : {resultat.stderr.strip()[:300]}"
+        )
+
+
+async def _synthese_piper(texte: str, chemin_audio: Path) -> list[_Replique]:
+    """Génère voix off et sous-titres avec le moteur local, sans réseau."""
+    if not MODELE_PIPER.is_file():
+        raise VoiceOverError(
+            "Modèle vocal local introuvable "
+            f"({MODELE_PIPER.relative_to(PROJECT_ROOT).as_posix()})."
+        )
+
+    chemin_wav = chemin_audio.with_name(f"{chemin_audio.stem}.piper.wav")
+    try:
+        duree = await asyncio.to_thread(_piper_synthese_sync, texte, chemin_wav)
+        await asyncio.to_thread(_wav_vers_mp3_sync, chemin_wav, chemin_audio)
+    except Exception as exc:
+        logger.warning("Échec du moteur vocal local piper : %s", exc)
+        raise VoiceOverError(
+            "Le moteur vocal local n'a pas pu générer la voix off."
+        ) from exc
+    finally:
+        chemin_wav.unlink(missing_ok=True)
+
+    if not chemin_audio.is_file() or chemin_audio.stat().st_size == 0:
+        raise VoiceOverError("Le moteur vocal local n'a produit aucun audio.")
+
+    logger.info(
+        "Voix off locale générée : %.2f s de audio, %d phrase(s)",
+        duree,
+        len(_extraire_phrases(texte)),
+    )
+    return _repliques_depuis_duree(texte, duree)
+
+
+# ---------------------------------------------------------------------------
+# API publique
+# ---------------------------------------------------------------------------
+
+
 async def generate_voiceover_and_subs(
     text: str,
     output_audio_path: str,
@@ -141,6 +293,9 @@ async def generate_voiceover_and_subs(
     voice: str = "fr-FR-DeniseNeural",
 ) -> tuple[Path, Path]:
     """Génère la voix off et ses sous-titres synchronisés.
+
+    ``edge-tts`` est tenté en priorité. Toute défaillance déclenche
+    automatiquement le moteur local Piper, sans erreur renvoyée au client.
 
     Args:
         text: Texte à prononcer.
@@ -153,8 +308,8 @@ async def generate_voiceover_and_subs(
         Le couple ``(chemin_audio, chemin_sous_titres)`` sous forme de ``Path``.
 
     Raises:
-        VoiceOverError: Si le texte est vide, si le service est injoignable ou
-            si l'écriture des fichiers échoue. Les fichiers partiels sont
+        VoiceOverError: Si le texte est vide ou si aucun des deux moteurs ne
+            parvient à produire un fichier. Les fichiers partiels sont alors
             supprimés automatiquement.
     """
     texte_nettoye = text.strip() if isinstance(text, str) else ""
@@ -170,30 +325,40 @@ async def generate_voiceover_and_subs(
         chemin_audio.parent.mkdir(parents=True, exist_ok=True)
         chemin_sous_titres.parent.mkdir(parents=True, exist_ok=True)
 
-        await asyncio.wait_for(
-            _stream_audio(texte_nettoye, voice, chemin_audio, constructeur),
-            timeout=TIMEOUT_SYNTHESE,
+        try:
+            await asyncio.wait_for(
+                _stream_audio(texte_nettoye, voice, chemin_audio, constructeur),
+                timeout=TIMEOUT_SYNTHESE,
+            )
+            repliques = constructeur.terminer()
+            if not repliques:
+                raise VoiceOverError("Aucun repère de sous-titres reçu d'edge-tts.")
+            logger.info("Voix off générée via edge-tts (%d répliques).", len(repliques))
+        except Exception as exc_edge:
+            # 403, timeout, coupure réseau ou sous-titres vides : on bascule.
+            chemin_audio.unlink(missing_ok=True)
+            logger.warning(
+                "edge-tts indisponible (%s) ; bascule sur le moteur local Piper.",
+                exc_edge,
+            )
+            repliques = await _synthese_piper(texte_nettoye, chemin_audio)
+
+        chemin_sous_titres.write_text(
+            _rendre_sous_titres(repliques, format_vtt), encoding="utf-8"
         )
-
-        repliques = constructeur.terminer()
-        if not repliques:
-            raise VoiceOverError("Aucun repère de sous-titres n'a été reçu.")
-
-        contenu = _rendre_sous_titres(repliques, format_vtt)
-        chemin_sous_titres.write_text(contenu, encoding="utf-8")
     except VoiceOverError:
         _nettoyer(chemin_audio, chemin_sous_titres)
         raise
     except Exception as exc:
         _nettoyer(chemin_audio, chemin_sous_titres)
-        logger.warning("Échec de la synthèse vocale edge-tts : %s", exc)
+        logger.warning("Échec de la synthèse vocale : %s", exc)
         raise VoiceOverError(
-            "Service de synthèse vocale indisponible "
-            "(connexion Internet requise par edge-tts)."
+            "Impossible de générer la voix off "
+            "(moteurs en ligne et local tous deux défaillants)."
         ) from exc
 
     logger.info(
-        "Voix off générée : %s (%d répliques de sous-titres)",
+        "Voix off prête : %s (%d répliques de sous-titres)",
         chemin_audio,
         len(repliques),
     )

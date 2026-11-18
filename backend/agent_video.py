@@ -29,7 +29,15 @@ FORMATS: dict[str, tuple[int, int]] = {
     "16:9": (1920, 1080),
     "1:1": (1080, 1080),
 }
+FORMATS_LEGERS: dict[str, tuple[int, int]] = {
+    "9:16": (720, 1280),
+    "16:9": (1280, 720),
+    "1:1": (720, 720),
+}
+"""Résolutions du mode léger, activé par défaut pour préserver la RAM."""
 FPS = 24
+FPS_LEGER = 20
+
 COULEUR_FOND = (10, 10, 15)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMP_DIR = PROJECT_ROOT / "temp"
@@ -200,6 +208,7 @@ def _assembler_sync(
     subtitle_path: str | None,
     output_video_path: str,
     dimensions: tuple[int, int],
+    fps: int = FPS,
 ) -> ResultatMontage:
     """Rendu synchrone (exécuté dans un thread dédié)."""
     images = [Path(chemin) for chemin in image_paths]
@@ -256,7 +265,7 @@ def _assembler_sync(
 
         video.write_videofile(
             str(cible_rendu),
-            fps=FPS,
+            fps=fps,
             codec="libx264",
             audio_codec="aac",
             preset="ultrafast",
@@ -314,6 +323,7 @@ async def assemble_video(
     subtitle_path: str,
     output_video_path: str,
     format_video: str = "9:16",
+    mode_leger: bool = True,
 ) -> ResultatMontage:
     """Assemble images, voix off et sous-titres en une vidéo finale.
 
@@ -321,8 +331,10 @@ async def assemble_video(
         image_paths: Chemins des images sources, dans l'ordre d'apparition.
         audio_path: Fichier audio de la voix off (durée de référence).
         subtitle_path: Fichier SRT/VTT (chaîne vide pour désactiver).
-        output_video_path: Chemin de la vidéo MP3/MP4 de sortie.
+        output_video_path: Chemin de la vidéo MP4 de sortie.
         format_video: ``9:16``, ``16:9`` ou ``1:1``.
+        mode_leger: Si vrai (défaut), rend en 720p à 20 fps pour limiter la
+            mémoire. False produit la pleine définition (1080p/24 fps).
 
     Returns:
         Le :class:`ResultatMontage` décrivant la vidéo produite.
@@ -337,6 +349,8 @@ async def assemble_video(
             f"Format vidéo invalide. Formats acceptés : {formats}."
         )
 
+    dimensions = (FORMATS_LEGERS if mode_leger else FORMATS)[format_video]
+    fps = FPS_LEGER if mode_leger else FPS
     sous_titres = subtitle_path.strip() if isinstance(subtitle_path, str) else ""
     return await asyncio.to_thread(
         _assembler_sync,
@@ -344,5 +358,6 @@ async def assemble_video(
         audio_path,
         sous_titres or None,
         output_video_path,
-        FORMATS[format_video],
+        dimensions,
+        fps,
     )
