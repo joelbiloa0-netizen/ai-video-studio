@@ -16,6 +16,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
+from .agent_editor import (
+    SegmentsInvalidesError,
+    VideoEditError,
+    cut_and_merge_rush,
+)
 from .agent_sound import VoiceOverError, generate_voiceover_and_subs
 from .agent_transcriber import TranscriptionError, transcribe_audio_or_video
 from .agent_video import VideoAssemblyError, assemble_video
@@ -72,6 +77,7 @@ def read_status() -> dict[str, Any]:
             "sous-titres synchronisés",
             "voix off edge-tts avec secours local",
             "transcription de rush via Whisper CPU int8",
+            "édition d'un rush par le texte (découpe + concaténation)",
             "montage FFmpeg / MoviePy",
         ],
     }
@@ -346,6 +352,10 @@ class TranscriptionResponse(BaseModel):
     duree_secondes: float
     modele: str
     media_path: str
+    segments: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Phrases transcrites avec start/end/text pour l'édition.",
+    )
 
 
 @app.post(
@@ -418,6 +428,80 @@ async def transcribe_media(
         duree_secondes=round(resultat.duree_secondes, 3),
         modele=model_size,
         media_path=chemin_media.relative_to(PROJECT_ROOT).as_posix(),
+        segments=resultat.segments,
+    )
+
+
+class SegmentConserve(BaseModel):
+    """Un passage du rush à garder, validé par l'utilisateur."""
+
+    start: float = Field(..., ge=0, description="Début en secondes.")
+    end: float = Field(..., gt=0, description="Fin en secondes.")
+    text: str = Field(default="", description="Texte du sous-titre associé.")
+
+
+class EditRushRequest(BaseModel):
+    """Corps de la requête d'édition par le texte."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    media_path: str = Field(..., description="Chemin du rush dans le projet.")
+    kept_segments: list[SegmentConserve] = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Segments conservés, dans leur ordre d'apparition.",
+    )
+
+
+class EditRushResponse(BaseModel):
+    """Vidéo nettoyée et sous-titres recalculés, prêts pour l'aperçu web."""
+
+    video_path: str
+    video_url: str
+    sous_titres_path: str
+    sous_titres_url: str
+    duree_secondes: float
+    nombre_segments: int
+
+
+@app.post(
+    "/api/edit-rush",
+    response_model=EditRushResponse,
+    tags=["Vidéo"],
+    summary="Découpe un rush selon les segments conservés et concatène le tout",
+)
+async def edit_rush(requete: EditRushRequest) -> EditRushResponse:
+    """Monte les passages gardés et livre la vidéo + le SRT dans `outputs/`."""
+    media = _chemin_dans_projet(requete.media_path)
+    if not media.is_file():
+        raise HTTPException(status_code=400, detail=f"Rush introuvable : {media}")
+
+    identifiant = uuid4().hex[:12]
+    sortie = OUTPUTS_DIR / f"clean-{identifiant}.mp4"
+    sous_titres = OUTPUTS_DIR / f"clean-{identifiant}.srt"
+
+    try:
+        resultat = await cut_and_merge_rush(
+            str(media),
+            [segment.model_dump() for segment in requete.kept_segments],
+            str(sortie),
+            str(sous_titres),
+        )
+    except SegmentsInvalidesError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VideoEditError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Échec de l'édition du rush : {exc}"
+        ) from exc
+
+    return EditRushResponse(
+        video_path=resultat.chemin_video.relative_to(PROJECT_ROOT).as_posix(),
+        video_url=f"/outputs/{resultat.chemin_video.name}",
+        sous_titres_path=resultat.chemin_srt.relative_to(PROJECT_ROOT).as_posix(),
+        sous_titres_url=f"/outputs/{resultat.chemin_srt.name}",
+        duree_secondes=round(resultat.duree_secondes, 3),
+        nombre_segments=resultat.nombre_segments,
     )
 
 

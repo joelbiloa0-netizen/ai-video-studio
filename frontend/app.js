@@ -19,6 +19,17 @@ const statusPill = document.getElementById("api-status");
 const statusLabel = document.getElementById("api-status-label");
 const tabs = Array.from(document.querySelectorAll(".tab"));
 
+const rushInput = document.getElementById("rush-file");
+const rushModel = document.getElementById("rush-model");
+const transcribeButton = document.getElementById("transcribe-btn");
+const segmentsArea = document.getElementById("segments-area");
+const segmentList = document.getElementById("segment-list");
+const segmentsSummary = document.getElementById("segments-summary");
+const selectAllButton = document.getElementById("select-all");
+const selectNoneButton = document.getElementById("select-none");
+const editButton = document.getElementById("edit-btn");
+const editStatus = document.getElementById("edit-status");
+
 const STEPS = ["script", "audio", "video", "result"];
 const ICONS = { pending: "○", running: "◐", done: "✓", error: "!" };
 const FORMAT_SIZES = {
@@ -27,7 +38,7 @@ const FORMAT_SIZES = {
   "1:1": [720, 720],
 };
 
-const state = { scenario: null, audio: null, video: null };
+const state = { scenario: null, audio: null, video: null, transcription: null };
 
 /* ---------- Utilitaires ---------- */
 
@@ -188,6 +199,121 @@ async function uploadImages(files) {
   const body = new FormData();
   files.forEach((file) => body.append("files", file, file.name));
   return apiRequest("/api/upload-images", { method: "POST", body });
+}
+
+/* ---------- Édition d'un rush par le texte ---------- */
+
+function formatTime(secondes) {
+  const valeur = Math.max(0, Number(secondes) || 0);
+  const minutes = Math.floor(valeur / 60);
+  const reste = (valeur - minutes * 60).toFixed(2).padStart(5, "0");
+  return `${String(minutes).padStart(2, "0")}:${reste}`;
+}
+
+function setEditorLoading(loading, bouton, label) {
+  bouton.disabled = loading;
+  bouton.textContent = loading ? "Traitement en cours…" : label;
+}
+
+function renderSegments(segments) {
+  segmentList.innerHTML = segments
+    .map(
+      (segment, index) => `
+        <li class="segment-item">
+          <label>
+            <input type="checkbox" class="segment-check" data-index="${index}" checked />
+            <span class="segment-time">${formatTime(segment.start)} → ${formatTime(segment.end)}</span>
+            <span class="segment-text">${escapeHtml(segment.text)}</span>
+          </label>
+        </li>`,
+    )
+    .join("");
+  segmentsSummary.textContent = `${segments.length} phrase(s) transcrite(s) · décochez ce que vous voulez couper`;
+  segmentsArea.hidden = false;
+}
+
+async function transcribeRush() {
+  const fichier = rushInput.files?.[0];
+  if (!fichier) {
+    showAlert("Sélectionnez d'abord une vidéo ou un audio à transcrire.");
+    return;
+  }
+
+  hideAlert();
+  editStatus.hidden = true;
+  segmentsArea.hidden = true;
+  setEditorLoading(true, transcribeButton, "Transcrire le rush");
+
+  try {
+    const body = new FormData();
+    body.append("media", fichier, fichier.name);
+    body.append("model_size", rushModel.value);
+    const transcription = await apiRequest("/api/transcribe", {
+      method: "POST",
+      body,
+    });
+    state.transcription = transcription;
+
+    if (!transcription.segments?.length) {
+      showAlert("Aucune phrase détectée dans ce rush.");
+      return;
+    }
+    renderSegments(transcription.segments);
+  } catch (error) {
+    showAlert(error instanceof Error ? error.message : String(error));
+  } finally {
+    setEditorLoading(false, transcribeButton, "Transcrire le rush");
+  }
+}
+
+async function generateCleanEdit() {
+  const transcription = state.transcription;
+  if (!transcription?.segments?.length) {
+    showAlert("Transcrivez d'abord un rush.");
+    return;
+  }
+
+  const gardes = Array.from(document.querySelectorAll(".segment-check"))
+    .filter((checkbox) => checkbox.checked)
+    .map((checkbox) => transcription.segments[Number(checkbox.dataset.index)])
+    .filter(Boolean);
+
+  if (gardes.length === 0) {
+    showAlert("Gardez au moins une phrase pour générer le montage.");
+    return;
+  }
+
+  hideAlert();
+  editStatus.hidden = true;
+  setEditorLoading(true, editButton, "Générer le montage nettoyé");
+
+  try {
+    const resultat = await apiRequest("/api/edit-rush", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        media_path: transcription.media_path,
+        kept_segments: gardes.map((segment) => ({
+          start: segment.start,
+          end: segment.end,
+          text: segment.text,
+        })),
+      }),
+    });
+
+    preview.src = resultat.video_url;
+    preview.load();
+    download.href = resultat.video_url;
+    download.download = resultat.video_url.split("/").pop() || "video.mp4";
+    download.hidden = false;
+    previewMeta.textContent = `Montage nettoyé · ${resultat.nombre_segments} segment(s) · ${resultat.duree_secondes} s`;
+    editStatus.textContent = `Montage prêt : ${resultat.nombre_segments} segment(s) conservé(s), ${resultat.duree_secondes} s · sous-titres recalculés.`;
+    editStatus.hidden = false;
+  } catch (error) {
+    showAlert(error instanceof Error ? error.message : String(error));
+  } finally {
+    setEditorLoading(false, editButton, "Générer le montage nettoyé");
+  }
 }
 
 /* ---------- Rendu des panneaux ---------- */
@@ -354,6 +480,21 @@ form.addEventListener("submit", async (event) => {
 
 tabs.forEach((tab) => {
   tab.addEventListener("click", () => activateStep(tab.dataset.step));
+});
+
+transcribeButton.addEventListener("click", transcribeRush);
+editButton.addEventListener("click", generateCleanEdit);
+
+selectAllButton.addEventListener("click", () => {
+  document.querySelectorAll(".segment-check").forEach((checkbox) => {
+    checkbox.checked = true;
+  });
+});
+
+selectNoneButton.addEventListener("click", () => {
+  document.querySelectorAll(".segment-check").forEach((checkbox) => {
+    checkbox.checked = false;
+  });
 });
 
 async function checkApi() {

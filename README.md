@@ -171,7 +171,22 @@ curl -X POST http://localhost:8000/api/transcribe \
   -F "model_size=tiny"
 ```
 
-Le média est enregistré dans `temp/`, converti en WAV 16 kHz mono par FFmpeg puis transcrit par Whisper **uniquement sur CPU en int8**. La réponse contient `sous_titres_path`, `texte`, `langue`, `duree_secondes` et `media_path` (ce dernier peut servir à remonter la vidéo). Le champ `model_size` accepte `tiny` (défaut, ~75 Mo) ou `base` (~145 Mo) ; un seul modèle est chargé en mémoire et une seule transcription tourne à la fois pour préserver la RAM. Le premier appel télécharge le modèle depuis Hugging Face (une seule fois).
+Le média est enregistré dans `temp/`, converti en WAV 16 kHz mono par FFmpeg puis transcrit par Whisper **uniquement sur CPU en int8**. La réponse contient `sous_titres_path`, `texte`, `langue`, `duree_secondes`, `media_path` (utile pour l'édition) et `segments` (tableau `{start, end, text}` par phrase). Le champ `model_size` accepte `tiny` (défaut, ~75 Mo) ou `base` (~145 Mo) ; un seul modèle est chargé en mémoire et une seule transcription tourne à la fois pour préserver la RAM. Le premier appel télécharge le modèle depuis Hugging Face (une seule fois).
+
+Éditer un rush en gardant uniquement certaines phrases (la réponse de `/api/transcribe` fournit directement `segments` et `media_path`) :
+
+```bash
+curl -X POST http://localhost:8000/api/edit-rush \
+  -H "Content-Type: application/json" \
+  -d '{"media_path": "temp/rush-xxx.mp4", "kept_segments": [
+        {"start": 0.0, "end": 2.2, "text": "Bonjour et bienvenue."},
+        {"start": 4.9, "end": 8.0, "text": "À vous de jouer !"}
+      ]}'
+```
+
+Chaque passage conservé est ré-encodé isolément (`libx264 -preset ultrafast -crf 23 -threads 2 -c:a aac`) puis concaténé sans ré-encodage : les coupes tombent juste, sans décalage d'image clé. La réponse renvoie `video_url` et `sous_titres_url` (servis depuis `/outputs/`) pour l'aperçu et le téléchargement, ainsi que `duree_secondes` et `nombre_segments`. Le SRT livré ne contient que les phrases gardées, avec des horodatages recalculés sur la **durée réellement encodée** de chaque morceau. FFmpeg système est utilisé en priorité, avec repli sur le binaire embarqué imageio s'il est absent.
+
+Dans l'interface, la carte « Nettoyer un rush existant » enchaîne transcription → liste des phrases cochées → bouton « Générer le montage nettoyé ». « Tout garder » / « Tout couper » permettent de préparer rapidement la sélection.
 
 ---
 
@@ -190,6 +205,7 @@ pytest tests/
 - **Mode léger 720p / 20 fps activé par défaut** dans l'interface et dans l'API, pour rester sous 1 Go de RAM pendant l'encodage.
 - Moteur vocal local Piper en int8/ONNX CPU (~61 Mo de modèle), chargé une seule fois puis réutilisé.
 - Transcription Whisper en `tiny` int8 : **aucun GPU**, modèle chargé une seule fois, verrou sérialisant les requêtes, WAV temporaire supprimé après chaque appel.
+- Édition d'un rush : découpe en subprocess asynchrones, 2 threads FFmpeg maximum par segment, fichiers intermédiaires regroupés dans un dossier `temp/edition-*` supprimé intégralement après le rendu.
 - Aucun modèle de deep learning local lourd : uniquement des outils légers et gratuits.
 - Traitement vidéo **image par image** et écriture en flux avec FFmpeg, sans charger la vidéo entière en mémoire.
 - Résolutions et durées réduites par défaut pour les rendus de test.
@@ -207,6 +223,7 @@ pytest tests/
 - [x] Voix off edge-tts avec fallback local Piper + sous-titres synchronisés SRT / VTT
 - [x] Mode léger 720p par défaut pour les machines à faible RAM
 - [x] Agent de transcription Whisper CPU int8 d'un rush avec route POST /api/transcribe
+- [x] Édition d'un rush par le texte (cases à cocher + POST /api/edit-rush)
 - [ ] Style de sous-titres configurable
 - [x] Choix de la voix et de la langue (edge-tts)
 - [ ] File d'attente de rendus et suivi de progression

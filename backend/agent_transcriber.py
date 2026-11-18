@@ -17,7 +17,7 @@ import logging
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
@@ -51,6 +51,8 @@ class ResultatTranscription:
     texte: str
     langue: str | None = None
     duree_secondes: float = 0.0
+    segments: list[dict] = field(default_factory=list)
+    """Phrases avec ``start``, ``end`` et ``text`` pour l'édition par le texte."""
 
 
 @functools.lru_cache(maxsize=2)
@@ -180,6 +182,14 @@ def _transcrire_sync(
             texte=" ".join(texte for _, _, texte in segments),
             langue=getattr(informations, "language", None),
             duree_secondes=max(0.0, segments[-1][1]),
+            segments=[
+                {
+                    "start": round(debut, 3),
+                    "end": round(fin, 3),
+                    "text": texte,
+                }
+                for debut, fin, texte in segments
+            ],
         )
     except TranscriptionError:
         srt.unlink(missing_ok=True)

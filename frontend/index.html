@@ -166,6 +166,51 @@
         </div>
       </section>
 
+      <section class="card editor-card" aria-labelledby="editor-title">
+        <div class="card-heading compact">
+          <span class="eyebrow">Édition par le texte</span>
+          <h2 id="editor-title">Nettoyer un rush existant</h2>
+          <p>
+            Transcrivez votre vidéo, décochez les passages inutiles, puis
+            générez le montage nettoyé avec des sous-titres resynchronisés.
+          </p>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="rush-file">Vidéo ou audio à transcrire</label>
+            <input id="rush-file" type="file" accept="video/*,audio/*" />
+          </div>
+          <div class="field">
+            <label for="rush-model">Modèle Whisper</label>
+            <select id="rush-model">
+              <option value="tiny">Tiny · rapide (recommandé)</option>
+              <option value="base">Base · plus précis</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="btn btn-secondary" id="transcribe-btn" type="button">
+          Transcrire le rush
+        </button>
+
+        <div id="segments-area" hidden>
+          <div class="segments-toolbar">
+            <p class="muted" id="segments-summary"></p>
+            <div class="segment-actions">
+              <button class="btn-link" id="select-all" type="button">Tout garder</button>
+              <button class="btn-link" id="select-none" type="button">Tout couper</button>
+            </div>
+          </div>
+          <ul class="segment-list" id="segment-list"></ul>
+          <button class="btn btn-primary" id="edit-btn" type="button">
+            Générer le montage nettoyé
+          </button>
+        </div>
+
+        <p class="muted" id="edit-status" hidden></p>
+      </section>
+
       <section class="card preview-card" aria-labelledby="preview-title">
         <div class="card-heading compact">
           <span class="eyebrow">Aperçu</span>
