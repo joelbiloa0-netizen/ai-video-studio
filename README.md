@@ -57,6 +57,7 @@ Texte  →  Script / découpage  →  Voix off (edge-tts)
 | Montage | **FFmpeg** + **MoviePy** | Encodage, découpe, transitions et incrustation |
 | Langage | **Python 3** | Logique métier, agents et scripts multimédia |
 | Tests | **unittest / pytest** | Tests unitaires des fonctions critiques |
+| Scénario | **Google Gemini** (`google-generativeai`, optionnel) | Génération du scénario JSON structuré |
 | Coût | **100 % gratuit** | Aucun service payant ni abonnement requis |
 
 > ℹ️ `edge-tts` utilise le service vocal en ligne de Microsoft Edge : une connexion Internet est nécessaire pour la génération de la voix off. Tout le reste fonctionne localement.
@@ -95,6 +96,18 @@ pip install -r backend/requirements.txt
 
 Les dossiers `outputs/` et `temp/` sont ignorés par Git : ils sont créés localement **et recréés automatiquement au démarrage de l'API** (voir `backend/main.py`).
 
+### Mode scénariste IA (optionnel)
+
+Le scénario est généré hors ligne par défaut. Pour activer Gemini (quota gratuit) :
+
+```bash
+pip install -r backend/requirements-ai.txt
+export AI_API_KEY="votre-cle-gemini"
+# Optionnel : export AI_MODEL="gemini-2.0-flash"
+```
+
+Sans `AI_API_KEY`, si la bibliothèque est absente ou en cas d'erreur réseau, l'agent renvoie un scénario de secours statique et le pipeline continue normalement.
+
 ---
 
 ## 📖 Utilisation (une fois l'API en place)
@@ -105,6 +118,14 @@ uvicorn backend.main:app --reload
 ```
 
 Ouvrir ensuite `frontend/index.html` dans un navigateur (ou via un serveur statique local). Documentation interactive de l'API : `http://localhost:8000/docs`.
+
+Générer un scénario :
+
+```bash
+curl -X POST http://localhost:8000/api/generate-script \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Une vidéo de 30 secondes sur les bienfaits de la marche", "format_video": "9:16"}'
+```
 
 ---
 
@@ -130,7 +151,7 @@ pytest tests/
 
 ## 🗺️ Roadmap
 
-- [ ] Endpoint de génération de script à partir d'un sujet
+- [x] Endpoint de génération de script à partir d'un sujet
 - [ ] Sélection des formats 9:16 / 16:9 / 1:1 depuis l'interface
 - [ ] Style de sous-titres configurable
 - [ ] Choix de la voix et de la langue (edge-tts)

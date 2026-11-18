@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
+from pydantic import BaseModel, ConfigDict, Field
+
+from .agent_writer import FormatVideo, Scenario, generate_script
 
 # backend/main.py -> parent de backend/ = racine du projet
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -58,8 +61,41 @@ def read_root() -> dict[str, Any]:
         },
         "fonctionnalites": [
             "formats 9:16, 16:9 et 1:1",
+            "génération de scénario structuré (agent IA)",
             "sous-titres synchronisés",
             "voix off edge-tts",
             "montage FFmpeg / MoviePy",
         ],
     }
+
+
+class ScriptRequest(BaseModel):
+    """Corps de la requête de génération de scénario."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(
+        ...,
+        min_length=3,
+        max_length=2000,
+        description="Requête utilisateur décrivant la vidéo souhaitée.",
+    )
+    format_video: FormatVideo = Field(
+        default=FormatVideo.VERTICAL,
+        description="Format de rendu : 9:16, 16:9 ou 1:1.",
+    )
+
+
+@app.post(
+    "/api/generate-script",
+    response_model=Scenario,
+    tags=["Scénario"],
+    summary="Génère un scénario structuré à partir d'une requête",
+)
+async def create_script(requete: ScriptRequest) -> Scenario:
+    """Délègue la génération à l'agent Scénariste.
+
+    Renvoie toujours un scénario valide : en l'absence de ``AI_API_KEY`` ou en
+    cas d'erreur du LLM, l'agent retourne son scénario de secours hors ligne.
+    """
+    return await generate_script(requete.prompt, requete.format_video.value)

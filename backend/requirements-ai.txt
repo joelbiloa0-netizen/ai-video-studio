@@ -1,0 +1,3 @@
+# Dépendance OPTIONNELLE : active le mode scénariste IA (Gemini, quota gratuit).
+# Sans ce paquet ni AI_API_KEY, l'agent utilise automatiquement son scénario de secours.
+google-generativeai>=0.8.3,<1.0.0
