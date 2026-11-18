@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from .agent_sound import VoiceOverError, generate_voiceover_and_subs
 from .agent_writer import FormatVideo, Scenario, generate_script
 
 # backend/main.py -> parent de backend/ = racine du projet
@@ -99,3 +101,79 @@ async def create_script(requete: ScriptRequest) -> Scenario:
     cas d'erreur du LLM, l'agent retourne son scénario de secours hors ligne.
     """
     return await generate_script(requete.prompt, requete.format_video.value)
+
+
+class AudioRequest(BaseModel):
+    """Corps de la requête de génération de voix off et de sous-titres."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=5000,
+        description="Texte exact à prononcer par la voix off.",
+    )
+    voice: str = Field(
+        default="fr-FR-DeniseNeural",
+        min_length=2,
+        max_length=100,
+        description="Voix edge-tts à utiliser.",
+    )
+    format_sous_titres: Literal["srt", "vtt"] = Field(
+        default="srt",
+        description="Format des sous-titres générés.",
+    )
+    dossier: Literal["temp", "outputs"] = Field(
+        default="temp",
+        description="Dossier de destination des fichiers générés.",
+    )
+
+
+class AudioResponse(BaseModel):
+    """Chemins relatifs des fichiers générés."""
+
+    audio_path: str
+    sous_titres_path: str
+    voix: str
+    format_sous_titres: str
+
+
+@app.post(
+    "/api/generate-audio",
+    response_model=AudioResponse,
+    tags=["Audio"],
+    summary="Génère une voix off et ses sous-titres synchronisés",
+)
+async def create_audio(requete: AudioRequest) -> AudioResponse:
+    """Synthétise le texte en MP3 et produit les sous-titres associés.
+
+    En cas d'échec réseau d'edge-tts, renvoie une erreur HTTP 503 explicite
+    sans laisser de fichiers partiels dans `temp/` ou `outputs/`.
+    """
+    dossier_cible = PROJECT_ROOT / requete.dossier
+    identifiant = uuid4().hex[:12]
+    chemin_audio = dossier_cible / f"voiceover-{identifiant}.mp3"
+    chemin_sous_titres = (
+        dossier_cible / f"voiceover-{identifiant}.{requete.format_sous_titres}"
+    )
+
+    try:
+        audio, sous_titres = await generate_voiceover_and_subs(
+            requete.text,
+            str(chemin_audio),
+            str(chemin_sous_titres),
+            requete.voice,
+        )
+    except VoiceOverError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Synthèse vocale indisponible : {exc}",
+        ) from exc
+
+    return AudioResponse(
+        audio_path=audio.relative_to(PROJECT_ROOT).as_posix(),
+        sous_titres_path=sous_titres.relative_to(PROJECT_ROOT).as_posix(),
+        voix=requete.voice,
+        format_sous_titres=requete.format_sous_titres,
+    )

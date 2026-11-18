@@ -127,6 +127,16 @@ curl -X POST http://localhost:8000/api/generate-script \
   -d '{"prompt": "Une vidéo de 30 secondes sur les bienfaits de la marche", "format_video": "9:16"}'
 ```
 
+Générer une voix off et ses sous-titres synchronisés :
+
+```bash
+curl -X POST http://localhost:8000/api/generate-audio \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Bonjour et bienvenue au studio.", "voice": "fr-FR-DeniseNeural", "format_sous_titres": "srt", "dossier": "temp"}'
+```
+
+Le format des sous-titres est déduit de l'extension (`.srt` ou `.vtt`). Les fichiers partiels sont supprimés automatiquement en cas d'échec réseau, et l'API renvoie alors une erreur HTTP 503 explicite.
+
 ---
 
 ## 🧪 Tests
@@ -153,8 +163,9 @@ pytest tests/
 
 - [x] Endpoint de génération de script à partir d'un sujet
 - [ ] Sélection des formats 9:16 / 16:9 / 1:1 depuis l'interface
+- [x] Voix off edge-tts et sous-titres synchronisés SRT / VTT
 - [ ] Style de sous-titres configurable
-- [ ] Choix de la voix et de la langue (edge-tts)
+- [x] Choix de la voix et de la langue (edge-tts)
 - [ ] File d'attente de rendus et suivi de progression
 - [ ] Tests unitaires du pipeline de montage
 
