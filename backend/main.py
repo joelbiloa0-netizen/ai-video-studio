@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .agent_sound import VoiceOverError, generate_voiceover_and_subs
@@ -22,6 +24,7 @@ from .agent_writer import FormatVideo, Scenario, generate_script
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 TEMP_DIR = PROJECT_ROOT / "temp"
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 
 def ensure_directories() -> None:
@@ -50,8 +53,8 @@ app = FastAPI(
 )
 
 
-@app.get("/")
-def read_root() -> dict[str, Any]:
+@app.get("/api/status")
+def read_status() -> dict[str, Any]:
     """Renvoie un message de bienvenue et l'état actuel du studio."""
     return {
         "message": "Bienvenue dans le Studio Vidéo IA & Motion Design !",
@@ -70,6 +73,12 @@ def read_root() -> dict[str, Any]:
             "montage FFmpeg / MoviePy",
         ],
     }
+
+
+@app.get("/", include_in_schema=False)
+def read_index() -> FileResponse:
+    """Sert l'interface web à la racine de l'application."""
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 class ScriptRequest(BaseModel):
@@ -275,3 +284,43 @@ async def create_video(requete: VideoRequest) -> VideoResponse:
             else None
         ),
     )
+
+
+@app.post(
+    "/api/upload-images",
+    tags=["Vidéo"],
+    summary="Dépose des images de montage dans temp/",
+)
+async def upload_images(
+    files: list[UploadFile] = File(..., max_length=50),
+) -> dict[str, Any]:
+    """Reçoit des images et les enregistre dans `temp/` pour le montage."""
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    chemins: list[str] = []
+    for fichier in files:
+        type_media = (fichier.content_type or "").lower()
+        if not type_media.startswith("image/"):
+            raise HTTPException(
+                status_code=400, detail=f"Fichier non image : {fichier.filename}"
+            )
+        suffixe = Path(fichier.filename or "").suffix.lower()
+        if suffixe not in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}:
+            suffixe = ".png"
+        chemin = TEMP_DIR / f"upload-{uuid4().hex[:12]}{suffixe}"
+        try:
+            donnees = await fichier.read()
+            if not donnees:
+                raise HTTPException(
+                    status_code=400, detail=f"Fichier vide : {fichier.filename}"
+                )
+            chemin.write_bytes(donnees)
+        finally:
+            await fichier.close()
+        chemins.append(chemin.relative_to(PROJECT_ROOT).as_posix())
+    return {"image_paths": chemins}
+
+
+# Les montages statiques sont déclarés en dernier : les routes API restent prioritaires.
+ensure_directories()
+app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

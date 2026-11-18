@@ -110,14 +110,16 @@ Sans `AI_API_KEY`, si la bibliothèque est absente ou en cas d'erreur réseau, l
 
 ---
 
-## 📖 Utilisation (une fois l'API en place)
+## 📖 Utilisation
 
 ```bash
-# Lancer le serveur de développement
+source .venv/bin/activate
 uvicorn backend.main:app --reload
 ```
 
-Ouvrir ensuite `frontend/index.html` dans un navigateur (ou via un serveur statique local). Documentation interactive de l'API : `http://localhost:8000/docs`.
+L'interface web est servie directement à **http://localhost:8000** (HTML/CSS/JS pur, sans build). Documentation interactive de l'API : `http://localhost:8000/docs`, état du service : `http://localhost:8000/api/status`.
+
+Depuis l'interface : saisissez une idée, choisissez le format (9:16 / 16:9 / 1:1) et cliquez sur « Générer la vidéo ». Les quatre onglets affichent l'avancement (scénario → voix off → montage → résultat). Vous pouvez fournir vos propres images ; sinon, un visuel par scène est généré automatiquement dans le navigateur. Le lecteur HTML5 permet de prévisualiser le rendu et le bouton « Télécharger » récupère le MP4 final.
 
 Générer un scénario :
 
@@ -147,6 +149,8 @@ curl -X POST http://localhost:8000/api/assemble-video \
 
 La vidéo est écrite dans `outputs/`, calée sur la durée de la voix off. Les images sont redimensionnées sans déformation puis centrées. Si FFmpeg ne dispose pas du filtre `subtitles`, les sous-titres sont livrés en fichier `.srt` séparé à côté de la vidéo.
 
+Les images destinées au montage peuvent être déposées dans `temp/` via `POST /api/upload-images` (multipart/form-data, champ `files`) ; le service renvoie les chemins relatifs à utiliser dans `/api/assemble-video`.
+
 ---
 
 ## 🧪 Tests
@@ -173,7 +177,7 @@ pytest tests/
 ## 🗺️ Roadmap
 
 - [x] Endpoint de génération de script à partir d'un sujet
-- [ ] Sélection des formats 9:16 / 16:9 / 1:1 depuis l'interface
+- [x] Interface web responsive et sélection des formats 9:16 / 16:9 / 1:1
 - [x] Assemblage multi-formats (9:16, 16:9, 1:1) avec sous-titres incrustés
 - [x] Voix off edge-tts et sous-titres synchronisés SRT / VTT
 - [ ] Style de sous-titres configurable

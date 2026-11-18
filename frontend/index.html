@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Studio Vidéo IA & Motion Design : transformez une idée en vidéo courte, gratuitement et sur CPU."
+    />
+    <title>Studio Vidéo IA & Motion Design</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="glow glow-one" aria-hidden="true"></div>
+    <div class="glow glow-two" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">▶</span>
+        <div>
+          <h1>Studio Vidéo IA</h1>
+          <p>Motion Design · 100 % CPU · gratuit</p>
+        </div>
+      </div>
+      <div class="status-pill" id="api-status">
+        <span class="status-dot"></span>
+        <span id="api-status-label">Connexion…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card form-card" aria-labelledby="form-title">
+        <div class="card-heading">
+          <span class="eyebrow">Nouveau projet</span>
+          <h2 id="form-title">Votre idée, en vidéo.</h2>
+          <p>
+            Décrivez le sujet, choisissez le format et laissez les agents
+            scénariste, ingénieur son et monteur travailler pour vous.
+          </p>
+        </div>
+
+        <form id="video-form" novalidate>
+          <div class="field">
+            <label for="idea">Idée de la vidéo</label>
+            <textarea
+              id="idea"
+              name="idea"
+              rows="4"
+              minlength="3"
+              maxlength="2000"
+              placeholder="Ex. Une vidéo de 30 secondes sur les bienfaits de la marche au quotidien…"
+              required
+            ></textarea>
+            <div class="field-error" id="idea-error" hidden>
+              Décrivez votre idée en quelques mots (3 caractères minimum).
+            </div>
+          </div>
+
+          <fieldset class="field">
+            <legend>Format de sortie</legend>
+            <div class="format-grid">
+              <label class="format-option">
+                <input type="radio" name="format" value="9:16" checked />
+                <span class="format-shape shape-portrait" aria-hidden="true"></span>
+                <span class="format-text">
+                  <strong>9:16</strong>
+                  <small>Vertical · Reels</small>
+                </span>
+              </label>
+              <label class="format-option">
+                <input type="radio" name="format" value="16:9" />
+                <span class="format-shape shape-landscape" aria-hidden="true"></span>
+                <span class="format-text">
+                  <strong>16:9</strong>
+                  <small>Paysage · YouTube</small>
+                </span>
+              </label>
+              <label class="format-option">
+                <input type="radio" name="format" value="1:1" />
+                <span class="format-shape shape-square" aria-hidden="true"></span>
+                <span class="format-text">
+                  <strong>1:1</strong>
+                  <small>Carré · Publication</small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="voice">Voix off</label>
+              <select id="voice" name="voice">
+                <option value="fr-FR-DeniseNeural">Denise · français</option>
+                <option value="fr-FR-ChantalNeural">Chantal · français</option>
+                <option value="fr-FR-HenriNeural">Henri · français</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="images">Images <span class="optional">optionnel</span></label>
+              <input id="images" name="images" type="file" accept="image/*" multiple />
+              <small class="hint">
+                Sans image, des visuels de démonstration sont générés pour chaque scène.
+              </small>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="submit-btn" type="submit">
+            <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
+            <span id="submit-label">Générer la vidéo</span>
+          </button>
+        </form>
+      </section>
+
+      <section class="card pipeline-card" aria-labelledby="pipeline-title">
+        <div class="card-heading compact">
+          <span class="eyebrow">Pipeline</span>
+          <h2 id="pipeline-title">Suivi de la génération</h2>
+        </div>
+
+        <div class="alert" id="alert" role="alert" hidden></div>
+
+        <div class="tabs" role="tablist" aria-label="Étapes de génération">
+          <button class="tab active" role="tab" type="button" data-step="script" aria-selected="true">
+            <span class="tab-index">1</span>
+            <span>Scénario</span>
+            <span class="tab-icon" id="icon-script">○</span>
+          </button>
+          <button class="tab" role="tab" type="button" data-step="audio" aria-selected="false">
+            <span class="tab-index">2</span>
+            <span>Voix & sous-titres</span>
+            <span class="tab-icon" id="icon-audio">○</span>
+          </button>
+          <button class="tab" role="tab" type="button" data-step="video" aria-selected="false">
+            <span class="tab-index">3</span>
+            <span>Montage</span>
+            <span class="tab-icon" id="icon-video">○</span>
+          </button>
+          <button class="tab" role="tab" type="button" data-step="result" aria-selected="false">
+            <span class="tab-index">4</span>
+            <span>Résultat</span>
+            <span class="tab-icon" id="icon-result">○</span>
+          </button>
+        </div>
+
+        <div class="panels">
+          <div class="panel" id="panel-script" role="tabpanel">
+            <p class="muted">Le scénario structuré s'affichera ici.</p>
+          </div>
+          <div class="panel" id="panel-audio" role="tabpanel" hidden>
+            <p class="muted">La voix off et les sous-titres apparaîtront ici.</p>
+          </div>
+          <div class="panel" id="panel-video" role="tabpanel" hidden>
+            <p class="muted">Le montage vidéo démarrera après l'audio.</p>
+          </div>
+          <div class="panel" id="panel-result" role="tabpanel" hidden>
+            <p class="muted">Votre vidéo sera prête à être prévisualisée.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card preview-card" aria-labelledby="preview-title">
+        <div class="card-heading compact">
+          <span class="eyebrow">Aperçu</span>
+          <h2 id="preview-title">Vidéo finale</h2>
+        </div>
+        <div class="player-wrapper">
+          <video id="preview" controls playsinline preload="metadata">
+            Votre navigateur ne prend pas en charge la lecture vidéo.
+          </video>
+        </div>
+        <div class="preview-footer">
+          <p class="preview-meta" id="preview-meta">Aucune vidéo générée pour le moment.</p>
+          <a class="btn btn-secondary" id="download" href="#" download hidden>
+            ⬇ Télécharger
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      Studio Vidéo IA & Motion Design · FastAPI · FFmpeg / MoviePy · edge-tts
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
