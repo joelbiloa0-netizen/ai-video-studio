@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Médias et caches locaux
+outputs/
+temp/
+media_cache/
+*.mp4
+*.wav
+*.mp3
+
+# IDE / Système
+.vscode/
+.idea/
+.DS_Store
