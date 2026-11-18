@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .agent_sound import VoiceOverError, generate_voiceover_and_subs
+from .agent_video import VideoAssemblyError, assemble_video
 from .agent_writer import FormatVideo, Scenario, generate_script
 
 # backend/main.py -> parent de backend/ = racine du projet
@@ -176,4 +177,101 @@ async def create_audio(requete: AudioRequest) -> AudioResponse:
         sous_titres_path=sous_titres.relative_to(PROJECT_ROOT).as_posix(),
         voix=requete.voice,
         format_sous_titres=requete.format_sous_titres,
+    )
+
+
+def _chemin_dans_projet(chemin: str) -> Path:
+    """Résout un chemin fourni par le client en interdisant toute sortie du projet."""
+    chemin_resolu = Path(chemin)
+    if not chemin_resolu.is_absolute():
+        chemin_resolu = PROJECT_ROOT / chemin_resolu
+    chemin_resolu = chemin_resolu.resolve()
+    if not chemin_resolu.is_relative_to(PROJECT_ROOT):
+        raise HTTPException(status_code=400, detail="Chemin hors du projet.")
+    return chemin_resolu
+
+
+class VideoRequest(BaseModel):
+    """Corps de la requête d'assemblage vidéo."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    image_paths: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Chemins des images, dans l'ordre d'apparition.",
+    )
+    audio_path: str = Field(..., description="Chemin de la voix off MP3.")
+    subtitle_path: str | None = Field(
+        default=None,
+        description="Chemin d'un fichier SRT/VTT (optionnel).",
+    )
+    format_video: FormatVideo = Field(
+        default=FormatVideo.VERTICAL,
+        description="Format de rendu : 9:16, 16:9 ou 1:1.",
+    )
+
+
+class VideoResponse(BaseModel):
+    """Chemin de la vidéo finale et informations de rendu."""
+
+    video_path: str
+    duree_secondes: float
+    sous_titres_integres: bool
+    sous_titres_path: str | None = None
+
+
+@app.post(
+    "/api/assemble-video",
+    response_model=VideoResponse,
+    tags=["Vidéo"],
+    summary="Assemble images, voix off et sous-titres en vidéo finale",
+)
+async def create_video(requete: VideoRequest) -> VideoResponse:
+    """Orchestre le montage CPU via MoviePy/FFmpeg dans `outputs/`.
+
+    Les chemins fournis sont cantonnés à la racine du projet. La durée de la
+    vidéo est strictement calée sur celle de la voix off.
+    """
+    images = [_chemin_dans_projet(chemin) for chemin in requete.image_paths]
+    audio = _chemin_dans_projet(requete.audio_path)
+    sous_titres = (
+        _chemin_dans_projet(requete.subtitle_path) if requete.subtitle_path else None
+    )
+
+    for image in images:
+        if not image.is_file():
+            raise HTTPException(status_code=400, detail=f"Image introuvable : {image}")
+    if not audio.is_file():
+        raise HTTPException(status_code=400, detail=f"Audio introuvable : {audio}")
+    if sous_titres is not None and not sous_titres.is_file():
+        raise HTTPException(
+            status_code=400, detail=f"Sous-titres introuvables : {sous_titres}"
+        )
+
+    sortie = PROJECT_ROOT / "outputs" / f"video-{uuid4().hex[:12]}.mp4"
+    try:
+        resultat = await assemble_video(
+            [str(image) for image in images],
+            str(audio),
+            str(sous_titres) if sous_titres else "",
+            str(sortie),
+            requete.format_video.value,
+        )
+    except VideoAssemblyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible d'assembler la vidéo : {exc}",
+        ) from exc
+
+    return VideoResponse(
+        video_path=resultat.chemin_video.relative_to(PROJECT_ROOT).as_posix(),
+        duree_secondes=round(resultat.duree_secondes, 3),
+        sous_titres_integres=resultat.sous_titres_integres,
+        sous_titres_path=(
+            resultat.chemin_sous_titres.relative_to(PROJECT_ROOT).as_posix()
+            if resultat.chemin_sous_titres
+            else None
+        ),
     )

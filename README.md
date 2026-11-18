@@ -137,6 +137,16 @@ curl -X POST http://localhost:8000/api/generate-audio \
 
 Le format des sous-titres est déduit de l'extension (`.srt` ou `.vtt`). Les fichiers partiels sont supprimés automatiquement en cas d'échec réseau, et l'API renvoie alors une erreur HTTP 503 explicite.
 
+Assembler la vidéo finale (les chemins sont relatifs à la racine du projet) :
+
+```bash
+curl -X POST http://localhost:8000/api/assemble-video \
+  -H "Content-Type: application/json" \
+  -d '{"image_paths": ["temp/img1.png", "temp/img2.png"], "audio_path": "temp/vo.mp3", "subtitle_path": "temp/vo.srt", "format_video": "9:16"}'
+```
+
+La vidéo est écrite dans `outputs/`, calée sur la durée de la voix off. Les images sont redimensionnées sans déformation puis centrées. Si FFmpeg ne dispose pas du filtre `subtitles`, les sous-titres sont livrés en fichier `.srt` séparé à côté de la vidéo.
+
 ---
 
 ## 🧪 Tests
@@ -156,6 +166,7 @@ pytest tests/
 - Résolutions et durées réduites par défaut pour les rendus de test.
 - Fichiers intermédiaires stockés dans `temp/` puis supprimés après chaque génération.
 - Aucun build frontend : le navigateur charge directement HTML, CSS et JavaScript natifs.
+- Rendu MoviePy/FFmpeg **CPU uniquement** (aucun accélérateur NVIDIA), images pré-redimensionnées puis centrées avant encodage.
 
 ---
 
@@ -163,6 +174,7 @@ pytest tests/
 
 - [x] Endpoint de génération de script à partir d'un sujet
 - [ ] Sélection des formats 9:16 / 16:9 / 1:1 depuis l'interface
+- [x] Assemblage multi-formats (9:16, 16:9, 1:1) avec sous-titres incrustés
 - [x] Voix off edge-tts et sous-titres synchronisés SRT / VTT
 - [ ] Style de sous-titres configurable
 - [x] Choix de la voix et de la langue (edge-tts)
